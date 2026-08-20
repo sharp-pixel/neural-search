@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.ParseException;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.junit.After;
 import org.junit.BeforeClass;
 import org.opensearch.client.Request;
 import org.opensearch.client.RequestOptions;
@@ -50,59 +51,71 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         assumeTrue("requires the Security plugin", Boolean.parseBoolean(System.getProperty("security.enabled", "false")));
     }
 
+    @After
+    public void cleanUpResources() throws IOException {
+        deleteObjects(
+            List.of(
+                "/_plugins/_security/api/internalusers/" + USER_NAME,
+                "/_plugins/_security/api/roles/" + ROLE_NAME,
+                "/_search/pipeline/" + SEARCH_PIPELINE_NAME,
+                "/" + INDEX_NAME
+            )
+        );
+    }
+
     public void testDlsFiltersHybridHitsAndAggregations() throws Exception {
         createIndexAndDocuments();
 
-        boolean searchPipelineCreated = false;
-        boolean roleCreated = false;
-        boolean userCreated = false;
-        try {
-            assertOk(performAdminJsonRequest("PUT", "/_search/pipeline/" + SEARCH_PIPELINE_NAME, """
+        assertOk(performAdminJsonRequest("PUT", "/_search/pipeline/" + SEARCH_PIPELINE_NAME, """
+            {
+              "description": "Normalize hybrid query results for DLS testing",
+              "phase_results_processors": [
                 {
-                  "description": "Normalize hybrid query results for DLS testing",
-                  "phase_results_processors": [
-                    {
-                      "normalization-processor": {
-                        "normalization": { "technique": "min_max" },
-                        "combination": { "technique": "arithmetic_mean" }
-                      }
-                    }
-                  ]
+                  "normalization-processor": {
+                    "normalization": { "technique": "min_max" },
+                    "combination": { "technique": "arithmetic_mean" }
+                  }
                 }
-                """));
-            searchPipelineCreated = true;
-            assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
-            roleCreated = true;
-            assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
-            userCreated = true;
-
-            Map<String, Object> adminResponse = performSearch(primaryHybridRequest(), false);
-            assertHitIds(adminResponse, ALL_DOCUMENT_IDS);
-            assertGlobalAccessBuckets(adminResponse, Map.of("allowed", 2, "blocked", 2));
-
-            Map<String, Object> restrictedResponse = performSearch(primaryHybridRequest(), true);
-            assertHitIds(restrictedResponse, ALLOWED_DOCUMENT_IDS);
-            assertGlobalAccessBuckets(restrictedResponse, Map.of("allowed", 2));
-
-            Map<String, Object> responseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
-            assertHitIds(responseWithSuggest, ALLOWED_DOCUMENT_IDS);
-            assertTrue(asMap(responseWithSuggest.get("suggest")).containsKey("label-suggest"));
-
-            Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
-            assertHitIds(responseWithHybridFilter, Set.of("allowed-alpha"));
-
-            Map<String, Object> singleClauseResponse = performSearch(singleClauseHybridRequest(), true);
-            assertHitIds(singleClauseResponse, Set.of("allowed-alpha"));
-        } finally {
-            if (userCreated) {
-                deleteObject("/_plugins/_security/api/internalusers/" + USER_NAME);
+              ]
             }
-            if (roleCreated) {
-                deleteObject("/_plugins/_security/api/roles/" + ROLE_NAME);
+            """));
+        assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
+        assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
+
+        Map<String, Object> adminResponse = performSearch(primaryHybridRequest(), false);
+        assertHitIds(adminResponse, ALL_DOCUMENT_IDS);
+        assertGlobalAccessBuckets(adminResponse, Map.of("allowed", 2, "blocked", 2));
+
+        Map<String, Object> restrictedResponse = performSearch(primaryHybridRequest(), true);
+        assertHitIds(restrictedResponse, ALLOWED_DOCUMENT_IDS);
+        assertGlobalAccessBuckets(restrictedResponse, Map.of("allowed", 2));
+
+        Map<String, Object> responseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
+        assertHitIds(responseWithSuggest, ALLOWED_DOCUMENT_IDS);
+        assertTrue(asMap(responseWithSuggest.get("suggest")).containsKey("label-suggest"));
+
+        Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
+        assertHitIds(responseWithHybridFilter, Set.of("allowed-alpha"));
+
+        Map<String, Object> singleClauseResponse = performSearch(singleClauseHybridRequest(), true);
+        assertHitIds(singleClauseResponse, Set.of("allowed-alpha"));
+    }
+
+    private void deleteObjects(List<String> endpoints) throws IOException {
+        IOException cleanupFailure = null;
+        for (String endpoint : endpoints) {
+            try {
+                deleteObject(endpoint);
+            } catch (IOException e) {
+                if (cleanupFailure == null) {
+                    cleanupFailure = e;
+                } else {
+                    cleanupFailure.addSuppressed(e);
+                }
             }
-            if (searchPipelineCreated) {
-                deleteObject("/_search/pipeline/" + SEARCH_PIPELINE_NAME);
-            }
+        }
+        if (cleanupFailure != null) {
+            throw cleanupFailure;
         }
     }
 
