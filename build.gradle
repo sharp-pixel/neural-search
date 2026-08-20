@@ -98,19 +98,17 @@ ext {
 
     configureSecurityPlugin = { OpenSearchCluster cluster ->
         configurations.secureIntegTestPluginArchive.asFileTree.each {
-            if(it.name.contains("opensearch-security")){
-                cluster.plugin(provider(new Callable<RegularFile>() {
-                    @Override
-                    RegularFile call() throws Exception {
-                        return new RegularFile() {
-                            @Override
-                            File getAsFile() {
-                                return it
-                            }
+            cluster.plugin(provider(new Callable<RegularFile>() {
+                @Override
+                RegularFile call() throws Exception {
+                    return new RegularFile() {
+                        @Override
+                        File getAsFile() {
+                            return it
                         }
                     }
-                }))
-            }
+                }
+            }))
         }
 
         cluster.getNodes().forEach { node ->
