@@ -15,8 +15,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.hc.core5.http.HttpHeaders;
-import org.apache.hc.core5.http.ParseException;
-import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.opensearch.client.Request;
@@ -24,8 +22,6 @@ import org.opensearch.client.RequestOptions;
 import org.opensearch.client.Response;
 import org.opensearch.client.ResponseException;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.neuralsearch.OpenSearchSecureRestTestCase;
@@ -163,10 +159,12 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-beta", """
             { "access": "blocked", "signal": "beta", "visibility": "public", "label": "classified" }
             """));
-        assertOk(client().performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh")));
+        Response refreshResponse = client().performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh"));
+        assertOk(refreshResponse);
+        assertNoFailedShards(responseAsMap(refreshResponse));
     }
 
-    private Map<String, Object> performSearch(String requestBody, boolean asDlsUser) throws IOException, ParseException {
+    private Map<String, Object> performSearch(String requestBody, boolean asDlsUser) throws IOException {
         Request request = new Request("POST", "/" + INDEX_NAME + "/_search");
         request.addParameter("search_pipeline", SEARCH_PIPELINE_NAME);
         request.setJsonEntity(requestBody);
@@ -182,7 +180,7 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
 
         Response response = client().performRequest(request);
         assertEquals(RestStatus.OK.getStatus(), response.getStatusLine().getStatusCode());
-        return XContentHelper.convertToMap(XContentType.JSON.xContent(), EntityUtils.toString(response.getEntity()), false);
+        return responseAsMap(response);
     }
 
     private String primaryHybridRequest() {
@@ -266,8 +264,7 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
     }
 
     private void assertHitIds(Map<String, Object> responseBody, Set<String> expectedIds) {
-        Map<String, Object> shards = asMap(responseBody.get("_shards"));
-        assertEquals(0, ((Number) shards.get("failed")).intValue());
+        assertNoFailedShards(responseBody);
 
         Map<String, Object> hits = asMap(responseBody.get("hits"));
         Map<String, Object> total = asMap(hits.get("total"));
@@ -280,6 +277,7 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
     }
 
     private void assertGlobalAccessBuckets(Map<String, Object> responseBody, Map<String, Integer> expectedBuckets) {
+        assertNotNull("response missing aggregations", responseBody.get("aggregations"));
         Map<String, Object> aggregations = asMap(responseBody.get("aggregations"));
         Map<String, Object> allDocuments = asMap(aggregations.get("all_documents"));
         Map<String, Object> visibleAccess = asMap(allDocuments.get("visible_access"));
@@ -311,6 +309,11 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         Request request = new Request(method, endpoint);
         request.setJsonEntity(body);
         return client().performRequest(request);
+    }
+
+    private void assertNoFailedShards(Map<String, Object> responseBody) {
+        Map<String, Object> shards = asMap(responseBody.get("_shards"));
+        assertEquals(0, ((Number) shards.get("failed")).intValue());
     }
 
     private String roleBody() throws IOException {
