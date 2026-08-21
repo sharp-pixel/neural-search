@@ -38,7 +38,7 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
     private static final String ROLE_NAME = "hybrid_query_dls_test_role";
     private static final String USER_NAME = "hybrid_query_dls_test_user";
     private static final String USER_PASSWORD = "HybridQueryDlsTest1!";
-    private static final String DLS_QUERY = "{\"term\":{\"access\":\"allowed\"}}";
+    private static final String DLS_QUERY_JSON = "{\"term\":{\"access\":\"allowed\"}}";
     private static final Set<String> ALL_DOCUMENT_IDS = Set.of("allowed-alpha", "allowed-beta", "blocked-alpha", "blocked-beta");
     private static final Set<String> ALLOWED_DOCUMENT_IDS = Set.of("allowed-alpha", "allowed-beta");
 
@@ -324,7 +324,8 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
                 .startObject()
                 .field("index_patterns", List.of(INDEX_NAME))
                 .field("allowed_actions", List.of("read"))
-                .field("dls", DLS_QUERY)
+                // The Security REST API expects DLS as a JSON-encoded string, not a nested object.
+                .field("dls", DLS_QUERY_JSON)
                 .endObject()
                 .endArray()
                 .endObject();
