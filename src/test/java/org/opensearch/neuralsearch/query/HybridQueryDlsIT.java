@@ -103,6 +103,8 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
 
         Map<String, Object> restrictedResponseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
         assertHitIds(restrictedResponseWithSuggest, ALLOWED_DOCUMENT_IDS);
+        // This verifies that a suggestion-bearing hybrid request remains compatible with DLS. Term-dictionary candidate
+        // filtering is existing Security plugin behavior and is outside this regression test's scope.
         assertSuggestionContains(restrictedResponseWithSuggest, "allowed-label-suggest", "document");
 
         Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
