@@ -90,9 +90,13 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         assertHitIds(restrictedResponse, ALLOWED_DOCUMENT_IDS);
         assertGlobalAccessBuckets(restrictedResponse, Map.of("allowed", 2));
 
-        Map<String, Object> responseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
-        assertHitIds(responseWithSuggest, ALLOWED_DOCUMENT_IDS);
-        assertTrue(asMap(responseWithSuggest.get("suggest")).containsKey("label-suggest"));
+        Map<String, Object> adminResponseWithSuggest = performSearch(hybridRequestWithSuggest(), false);
+        assertHitIds(adminResponseWithSuggest, ALL_DOCUMENT_IDS);
+        assertSuggestionOptions(adminResponseWithSuggest, "allowed-label-suggest", Set.of("document"));
+
+        Map<String, Object> restrictedResponseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
+        assertHitIds(restrictedResponseWithSuggest, ALLOWED_DOCUMENT_IDS);
+        assertSuggestionOptions(restrictedResponseWithSuggest, "allowed-label-suggest", Set.of("document"));
 
         Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
         assertHitIds(responseWithHybridFilter, Set.of("allowed-alpha"));
@@ -145,10 +149,10 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
             { "access": "allowed", "signal": "beta", "visibility": "private", "label": "manual" }
             """));
         assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-alpha", """
-            { "access": "blocked", "signal": "alpha", "visibility": "public", "label": "document" }
+            { "access": "blocked", "signal": "alpha", "visibility": "public", "label": "confidential" }
             """));
         assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-beta?refresh=true", """
-            { "access": "blocked", "signal": "beta", "visibility": "public", "label": "manual" }
+            { "access": "blocked", "signal": "beta", "visibility": "public", "label": "classified" }
             """));
     }
 
@@ -210,8 +214,8 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
                 }
               },
               "suggest": {
-                "text": "documnt",
-                "label-suggest": {
+                "allowed-label-suggest": {
+                  "text": "documnt",
                   "term": { "field": "label" }
                 }
               }
@@ -278,6 +282,16 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
             ((Number) allDocuments.get("doc_count")).intValue()
         );
         assertEquals(expectedBuckets, actualBuckets);
+    }
+
+    private void assertSuggestionOptions(Map<String, Object> responseBody, String suggestionName, Set<String> expectedOptions) {
+        Map<String, Object> suggestions = asMap(responseBody.get("suggest"));
+        List<Map<String, Object>> suggestionEntries = asList(suggestions.get(suggestionName));
+        assertEquals(1, suggestionEntries.size());
+
+        List<Map<String, Object>> options = asList(suggestionEntries.get(0).get("options"));
+        Set<String> actualOptions = options.stream().map(option -> (String) option.get("text")).collect(Collectors.toSet());
+        assertEquals(expectedOptions, actualOptions);
     }
 
     private Response performAdminJsonRequest(String method, String endpoint, String body) throws IOException {
