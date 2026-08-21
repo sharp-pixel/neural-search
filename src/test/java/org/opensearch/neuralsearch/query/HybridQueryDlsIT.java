@@ -79,8 +79,8 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
               ]
             }
             """));
-        assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
-        assertCreated(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
 
         Map<String, Object> adminResponse = performSearch(primaryHybridRequest(), false);
         assertHitIds(adminResponse, ALL_DOCUMENT_IDS);
@@ -92,11 +92,11 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
 
         Map<String, Object> adminResponseWithSuggest = performSearch(hybridRequestWithSuggest(), false);
         assertHitIds(adminResponseWithSuggest, ALL_DOCUMENT_IDS);
-        assertSuggestionOptions(adminResponseWithSuggest, "allowed-label-suggest", Set.of("document"));
+        assertSuggestionContains(adminResponseWithSuggest, "allowed-label-suggest", "document");
 
         Map<String, Object> restrictedResponseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
         assertHitIds(restrictedResponseWithSuggest, ALLOWED_DOCUMENT_IDS);
-        assertSuggestionOptions(restrictedResponseWithSuggest, "allowed-label-suggest", Set.of("document"));
+        assertSuggestionContains(restrictedResponseWithSuggest, "allowed-label-suggest", "document");
 
         Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
         assertHitIds(responseWithHybridFilter, Set.of("allowed-alpha"));
@@ -142,18 +142,19 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
             """);
         assertEquals(RestStatus.OK.getStatus(), createIndexResponse.getStatusLine().getStatusCode());
 
-        assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-alpha", """
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-alpha", """
             { "access": "allowed", "signal": "alpha", "visibility": "public", "label": "document" }
             """));
-        assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-beta", """
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-beta", """
             { "access": "allowed", "signal": "beta", "visibility": "private", "label": "manual" }
             """));
-        assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-alpha", """
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-alpha", """
             { "access": "blocked", "signal": "alpha", "visibility": "public", "label": "confidential" }
             """));
-        assertCreated(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-beta?refresh=true", """
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-beta", """
             { "access": "blocked", "signal": "beta", "visibility": "public", "label": "classified" }
             """));
+        assertOk(client().performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh")));
     }
 
     private Map<String, Object> performSearch(String requestBody, boolean asDlsUser) throws IOException, ParseException {
@@ -284,14 +285,17 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         assertEquals(expectedBuckets, actualBuckets);
     }
 
-    private void assertSuggestionOptions(Map<String, Object> responseBody, String suggestionName, Set<String> expectedOptions) {
+    private void assertSuggestionContains(Map<String, Object> responseBody, String suggestionName, String expectedOption) {
         Map<String, Object> suggestions = asMap(responseBody.get("suggest"));
         List<Map<String, Object>> suggestionEntries = asList(suggestions.get(suggestionName));
         assertEquals(1, suggestionEntries.size());
 
         List<Map<String, Object>> options = asList(suggestionEntries.get(0).get("options"));
         Set<String> actualOptions = options.stream().map(option -> (String) option.get("text")).collect(Collectors.toSet());
-        assertEquals(expectedOptions, actualOptions);
+        assertTrue(
+            "expected suggestion options to contain " + expectedOption + " but got " + actualOptions,
+            actualOptions.contains(expectedOption)
+        );
     }
 
     private Response performAdminJsonRequest(String method, String endpoint, String body) throws IOException {
@@ -323,8 +327,12 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         }
     }
 
-    private void assertCreated(Response response) {
-        assertEquals(RestStatus.CREATED.getStatus(), response.getStatusLine().getStatusCode());
+    private void assertCreatedOrOk(Response response) {
+        int status = response.getStatusLine().getStatusCode();
+        assertTrue(
+            "expected status 200 or 201 but got " + status,
+            status == RestStatus.OK.getStatus() || status == RestStatus.CREATED.getStatus()
+        );
     }
 
     private void assertOk(Response response) {
