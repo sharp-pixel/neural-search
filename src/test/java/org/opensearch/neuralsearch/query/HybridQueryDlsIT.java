@@ -48,11 +48,14 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
 
     @BeforeClass
     public static void requireSecurityPlugin() {
-        assumeTrue("requires the Security plugin", Boolean.parseBoolean(System.getProperty("security.enabled", "false")));
+        assumeTrue("requires the Security plugin", isSecurityPluginEnabled());
     }
 
     @After
     public void cleanUpResources() throws IOException {
+        if (!isSecurityPluginEnabled()) {
+            return;
+        }
         deleteObjects(
             List.of(
                 "/_plugins/_security/api/internalusers/" + USER_NAME,
@@ -61,6 +64,10 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
                 "/" + INDEX_NAME
             )
         );
+    }
+
+    private static boolean isSecurityPluginEnabled() {
+        return Boolean.parseBoolean(System.getProperty("security.enabled", "false"));
     }
 
     public void testDlsFiltersHybridHitsAndAggregations() throws Exception {
