@@ -211,18 +211,27 @@ Additionally, to run integration tests on multi nodes with security enabled, run
 ./gradlew :integTest -Dsecurity.enabled=true -PnumNodes=3
 ```
 
-To validate unpublished Security plugin changes, build the Security plugin archive
-and pass its absolute path to the Neural Search integration-test cluster:
+To validate unpublished Security plugin changes, publish the Security plugin ZIP
+to Maven Local from the Security plugin checkout:
 
 ```bash
+cd /path/to/opensearch-security
+./gradlew publishPluginZipPublicationToMavenLocal
+```
+
+Then run the Neural Search integration test using the locally published artifact:
+
+```bash
+cd /path/to/neural-search
 ./gradlew :integTest \
   --tests org.opensearch.neuralsearch.query.HybridQueryDlsIT \
   -Dsecurity.enabled=true \
-  -Dsecurity.plugin.path=/absolute/path/to/opensearch-security/build/distributions/opensearch-security-<version>.zip
+  -PnumNodes=3 \
+  --refresh-dependencies
 ```
 
-When `security.plugin.path` is not set, the build uses the Security plugin artifact
-whose version matches `opensearch_build`.
+The Security plugin version published to Maven Local must match the
+`opensearch_build` version used by Neural Search.
 
 Some integration tests are skipped by default, mainly to save time and resources. A special parameter is required to include those tests in the executed test suite. For example, the following command enables additional tests for aggregations when they are bundled with hybrid queries
 ```
