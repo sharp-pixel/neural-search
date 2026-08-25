@@ -8,7 +8,10 @@ import static org.junit.Assume.assumeTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,6 +19,7 @@ import java.util.stream.Collectors;
 
 import org.apache.hc.core5.http.HttpHeaders;
 import org.junit.After;
+import org.junit.Before;
 import org.junit.BeforeClass;
 import org.opensearch.client.Request;
 import org.opensearch.client.RequestOptions;
@@ -24,27 +28,53 @@ import org.opensearch.client.ResponseException;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.XContentBuilder;
-import org.opensearch.neuralsearch.OpenSearchSecureRestTestCase;
+import org.opensearch.neuralsearch.BaseNeuralSearchIT;
 
 /**
  * Cross-plugin coverage for DLS applied to a Neural Search hybrid query.
  *
  * @see <a href="https://github.com/opensearch-project/neural-search/issues/1303">neural-search#1303</a>
  */
-public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
+public class HybridQueryDlsIT extends BaseNeuralSearchIT {
 
     private static final String INDEX_NAME = "hybrid-query-dls-test";
     private static final String SEARCH_PIPELINE_NAME = "hybrid-query-dls-test-pipeline";
     private static final String ROLE_NAME = "hybrid_query_dls_test_role";
     private static final String USER_NAME = "hybrid_query_dls_test_user";
     private static final String USER_PASSWORD = "HybridQueryDlsTest1!";
+    private static final String KNN_VECTOR_FIELD = "knn_embedding";
+    private static final String NEURAL_VECTOR_FIELD = "neural_embedding";
+    private static final int NEURAL_VECTOR_DIMENSION = 768;
     private static final String DLS_QUERY_JSON = "{\"term\":{\"access\":\"allowed\"}}";
     private static final Set<String> ALL_DOCUMENT_IDS = Set.of("allowed-alpha", "allowed-beta", "blocked-alpha", "blocked-beta");
     private static final Set<String> ALLOWED_DOCUMENT_IDS = Set.of("allowed-alpha", "allowed-beta");
+    private static final Set<String> PUBLIC_DOCUMENT_IDS = Set.of("allowed-alpha", "blocked-alpha", "blocked-beta");
+    private static final Set<String> PUBLIC_ALLOWED_DOCUMENT_IDS = Set.of("allowed-alpha");
 
     @BeforeClass
     public static void requireSecurityPlugin() {
         assumeTrue("requires the Security plugin", isSecurityPluginEnabled());
+    }
+
+    @Before
+    public void setUpDlsResources() throws IOException {
+        createIndexAndDocuments();
+
+        assertOk(performAdminJsonRequest("PUT", "/_search/pipeline/" + SEARCH_PIPELINE_NAME, """
+            {
+              "description": "Normalize hybrid query results for DLS testing",
+              "phase_results_processors": [
+                {
+                  "normalization-processor": {
+                    "normalization": { "technique": "min_max" },
+                    "combination": { "technique": "arithmetic_mean" }
+                  }
+                }
+              ]
+            }
+            """));
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
+        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
     }
 
     @After
@@ -67,24 +97,6 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
     }
 
     public void testDlsFiltersHybridHitsAndAggregations() throws Exception {
-        createIndexAndDocuments();
-
-        assertOk(performAdminJsonRequest("PUT", "/_search/pipeline/" + SEARCH_PIPELINE_NAME, """
-            {
-              "description": "Normalize hybrid query results for DLS testing",
-              "phase_results_processors": [
-                {
-                  "normalization-processor": {
-                    "normalization": { "technique": "min_max" },
-                    "combination": { "technique": "arithmetic_mean" }
-                  }
-                }
-              ]
-            }
-            """));
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/roles/" + ROLE_NAME, roleBody()));
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/_plugins/_security/api/internalusers/" + USER_NAME, userBody()));
-
         Map<String, Object> adminResponse = performSearch(primaryHybridRequest(), false);
         assertHitIds(adminResponse, ALL_DOCUMENT_IDS);
         assertGlobalAccessBuckets(adminResponse, Map.of("allowed", 2, "blocked", 2));
@@ -110,6 +122,29 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
         assertHitIds(singleClauseResponse, Set.of("allowed-alpha"));
     }
 
+    public void testDlsFiltersHybridKnnQuery() throws Exception {
+        Map<String, Object> adminKnnResponse = performSearch(hybridKnnRequest(), false);
+        assertHitIds(adminKnnResponse, PUBLIC_DOCUMENT_IDS);
+
+        Map<String, Object> restrictedKnnResponse = performSearch(hybridKnnRequest(), true);
+        assertHitIds(restrictedKnnResponse, PUBLIC_ALLOWED_DOCUMENT_IDS);
+    }
+
+    public void testDlsFiltersHybridNeuralQuery() throws Exception {
+        String modelId = prepareModelForNeuralQuery();
+        Map<String, Object> adminNeuralResponse = performSearch(hybridNeuralRequest(modelId), false);
+        assertHitIds(adminNeuralResponse, PUBLIC_DOCUMENT_IDS);
+
+        Map<String, Object> restrictedNeuralResponse = performSearch(hybridNeuralRequest(modelId), true);
+        assertHitIds(restrictedNeuralResponse, PUBLIC_ALLOWED_DOCUMENT_IDS);
+
+        Map<String, Object> adminMixedResponse = performSearch(hybridKnnAndNeuralRequest(modelId), false);
+        assertHitIds(adminMixedResponse, PUBLIC_DOCUMENT_IDS);
+
+        Map<String, Object> restrictedMixedResponse = performSearch(hybridKnnAndNeuralRequest(modelId), true);
+        assertHitIds(restrictedMixedResponse, PUBLIC_ALLOWED_DOCUMENT_IDS);
+    }
+
     private void deleteObjects(List<String> endpoints) throws IOException {
         IOException cleanupFailure = null;
         for (String endpoint : endpoints) {
@@ -133,35 +168,75 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
             {
               "settings": {
                 "number_of_shards": 1,
-                "number_of_replicas": 0
+                "number_of_replicas": 0,
+                "index.knn": true
               },
               "mappings": {
                 "properties": {
                   "access": { "type": "keyword" },
                   "signal": { "type": "keyword" },
                   "visibility": { "type": "keyword" },
-                  "label": { "type": "text" }
+                  "label": { "type": "text" },
+                  "knn_embedding": {
+                    "type": "knn_vector",
+                    "dimension": 2,
+                    "method": { "name": "hnsw", "space_type": "l2", "engine": "lucene" }
+                  },
+                  "neural_embedding": {
+                    "type": "knn_vector",
+                    "dimension": 768,
+                    "method": { "name": "hnsw", "space_type": "l2", "engine": "lucene" }
+                  }
                 }
               }
             }
             """);
         assertEquals(RestStatus.OK.getStatus(), createIndexResponse.getStatusLine().getStatusCode());
 
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-alpha", """
-            { "access": "allowed", "signal": "alpha", "visibility": "public", "label": "document" }
-            """));
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/allowed-beta", """
-            { "access": "allowed", "signal": "beta", "visibility": "private", "label": "manual" }
-            """));
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-alpha", """
-            { "access": "blocked", "signal": "alpha", "visibility": "public", "label": "confidential" }
-            """));
-        assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/blocked-beta", """
-            { "access": "blocked", "signal": "beta", "visibility": "public", "label": "classified" }
-            """));
+        indexDocument("allowed-alpha", "allowed", "alpha", "public", "document", List.of(1.0f, 0.0f), 0.1f);
+        indexDocument("allowed-beta", "allowed", "beta", "private", "manual", List.of(0.9f, 0.1f), 0.2f);
+        indexDocument("blocked-alpha", "blocked", "alpha", "public", "confidential", List.of(0.0f, 1.0f), 0.3f);
+        indexDocument("blocked-beta", "blocked", "beta", "public", "classified", List.of(0.1f, 0.9f), 0.4f);
         Response refreshResponse = client().performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh"));
         assertOk(refreshResponse);
         assertNoFailedShards(responseAsMap(refreshResponse));
+    }
+
+    private void indexDocument(
+        String id,
+        String access,
+        String signal,
+        String visibility,
+        String label,
+        List<Float> knnVector,
+        float neuralVectorValue
+    ) throws IOException {
+        try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
+            builder.startObject()
+                .field("access", access)
+                .field("signal", signal)
+                .field("visibility", visibility)
+                .field("label", label)
+                .field(KNN_VECTOR_FIELD, knnVector)
+                .field(NEURAL_VECTOR_FIELD, Collections.nCopies(NEURAL_VECTOR_DIMENSION, neuralVectorValue))
+                .endObject();
+            assertCreatedOrOk(performAdminJsonRequest("PUT", "/" + INDEX_NAME + "/_doc/" + id, builder.toString()));
+        }
+    }
+
+    private String prepareModelForNeuralQuery() throws Exception {
+        String requestBody = Files.readString(Path.of(classLoader.getResource("processor/UploadModelRequestBody.json").toURI()));
+        String modelId = registerModelGroupAndUploadModel(requestBody);
+
+        updateClusterSettings("plugins.ml_commons.allow_custom_deployment_plan", true);
+        Map<String, Object> nodesResponse = responseAsMap(client().performRequest(new Request("GET", "/_nodes/_local")));
+        String nodeId = asMap(nodesResponse.get("nodes")).keySet().iterator().next();
+        try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
+            builder.startObject().field("node_ids", List.of(nodeId)).endObject();
+            assertOk(performAdminJsonRequest("POST", "/_plugins/_ml/models/" + modelId + "/_deploy", builder.toString()));
+        }
+        waitForModelToBeReady(modelId);
+        return modelId;
     }
 
     private Map<String, Object> performSearch(String requestBody, boolean asDlsUser) throws IOException {
@@ -263,6 +338,86 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
             """;
     }
 
+    private String hybridKnnRequest() {
+        return """
+            {
+              "size": 10,
+              "query": {
+                "hybrid": {
+                  "queries": [
+                    {
+                      "knn": {
+                        "knn_embedding": {
+                          "vector": [1.0, 0.0],
+                          "k": 10,
+                          "filter": { "term": { "visibility": "public" } }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """;
+    }
+
+    private String hybridNeuralRequest(String modelId) {
+        return """
+            {
+              "size": 10,
+              "query": {
+                "hybrid": {
+                  "queries": [
+                    {
+                      "neural": {
+                        "neural_embedding": {
+                          "query_text": "document",
+                          "model_id": "%s",
+                          "k": 10,
+                          "filter": { "term": { "visibility": "public" } }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """.formatted(modelId);
+    }
+
+    private String hybridKnnAndNeuralRequest(String modelId) {
+        return """
+            {
+              "size": 10,
+              "query": {
+                "hybrid": {
+                  "queries": [
+                    {
+                      "knn": {
+                        "knn_embedding": {
+                          "vector": [1.0, 0.0],
+                          "k": 10,
+                          "filter": { "term": { "visibility": "public" } }
+                        }
+                      }
+                    },
+                    {
+                      "neural": {
+                        "neural_embedding": {
+                          "query_text": "document",
+                          "model_id": "%s",
+                          "k": 10,
+                          "filter": { "term": { "visibility": "public" } }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """.formatted(modelId);
+    }
+
     private void assertHitIds(Map<String, Object> responseBody, Set<String> expectedIds) {
         assertNoFailedShards(responseBody);
 
@@ -319,7 +474,7 @@ public class HybridQueryDlsIT extends OpenSearchSecureRestTestCase {
     private String roleBody() throws IOException {
         try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
             builder.startObject()
-                .field("cluster_permissions", List.of())
+                .field("cluster_permissions", List.of("cluster:admin/opensearch/ml/predict"))
                 .startArray("index_permissions")
                 .startObject()
                 .field("index_patterns", List.of(INDEX_NAME))
