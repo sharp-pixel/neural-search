@@ -104,7 +104,9 @@ public class HybridQueryDlsIT extends BaseNeuralSearchIT {
         Map<String, Object> restrictedResponse = performSearch(primaryHybridRequest(), true);
         assertHitIds(restrictedResponse, ALLOWED_DOCUMENT_IDS);
         assertGlobalAccessBuckets(restrictedResponse, Map.of("allowed", 2));
+    }
 
+    public void testDlsSupportsSuggestionBearingHybridRequest() throws Exception {
         Map<String, Object> adminResponseWithSuggest = performSearch(hybridRequestWithSuggest(), false);
         assertHitIds(adminResponseWithSuggest, ALL_DOCUMENT_IDS);
         assertSuggestionContains(adminResponseWithSuggest, "allowed-label-suggest", "document");
@@ -112,12 +114,17 @@ public class HybridQueryDlsIT extends BaseNeuralSearchIT {
         Map<String, Object> restrictedResponseWithSuggest = performSearch(hybridRequestWithSuggest(), true);
         assertHitIds(restrictedResponseWithSuggest, ALLOWED_DOCUMENT_IDS);
         // This verifies that a suggestion-bearing hybrid request remains compatible with DLS. Term-dictionary candidate
-        // filtering is existing Security plugin behavior and is outside this regression test's scope.
+        // filtering is existing Security plugin behavior and is outside this regression test's scope, so the absence of
+        // suggestions sourced only from blocked documents is intentionally not asserted here.
         assertSuggestionContains(restrictedResponseWithSuggest, "allowed-label-suggest", "document");
+    }
 
+    public void testDlsCombinesWithExistingHybridFilter() throws Exception {
         Map<String, Object> responseWithHybridFilter = performSearch(hybridRequestWithFilter(), true);
         assertHitIds(responseWithHybridFilter, Set.of("allowed-alpha"));
+    }
 
+    public void testDlsSupportsSingleClauseHybridQuery() throws Exception {
         Map<String, Object> singleClauseResponse = performSearch(singleClauseHybridRequest(), true);
         assertHitIds(singleClauseResponse, Set.of("allowed-alpha"));
     }
