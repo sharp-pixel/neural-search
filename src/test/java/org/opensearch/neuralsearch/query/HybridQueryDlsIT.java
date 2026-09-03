@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -369,7 +370,9 @@ public class HybridQueryDlsIT extends BaseNeuralSearchIT {
     }
 
     private String hybridNeuralRequest(String modelId) {
-        return """
+        return String.format(
+            Locale.ROOT,
+            """
             {
               "size": 10,
               "query": {
@@ -389,11 +392,15 @@ public class HybridQueryDlsIT extends BaseNeuralSearchIT {
                 }
               }
             }
-            """.formatted(modelId);
+            """,
+            modelId
+        );
     }
 
     private String hybridKnnAndNeuralRequest(String modelId) {
-        return """
+        return String.format(
+            Locale.ROOT,
+            """
             {
               "size": 10,
               "query": {
@@ -422,7 +429,9 @@ public class HybridQueryDlsIT extends BaseNeuralSearchIT {
                 }
               }
             }
-            """.formatted(modelId);
+            """,
+            modelId
+        );
     }
 
     private void assertHitIds(Map<String, Object> responseBody, Set<String> expectedIds) {
